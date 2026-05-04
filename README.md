@@ -14,3 +14,10 @@ Sensor data (when clicked opens chart with historical data (past 24h))
 Anomaly warning
 
 Sensor and db is a raspberryPi or phone camera for detection
+
+Additional points:
+
+* Detect energy waste, not only display sensor data.
+* Example: machines or air conditioners running when no one is in the room, or rooms being cooled more than necessary.
+* Estimate wasted energy from the past 24 hours of data, especially during empty periods.
+* If cameras or YOLO are used, mention privacy: do not store images, only use occupancy status or detected person count.
