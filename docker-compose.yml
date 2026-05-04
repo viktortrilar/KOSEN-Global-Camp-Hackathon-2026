@@ -1,0 +1,29 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: coolwatch-mqtt
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+
+  app:
+    build: ./app
+    container_name: coolwatch-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app
+      - ./data:/data        # SQLite lives here
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - DB_PATH=/data/coolwatch.db
+      - CAMERA_URL=http://192.168.179.x:8080/video  # ← update with phone IP
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+
