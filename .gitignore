@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+data/coolwatch.db
+data/yolo/
+mosquitto/data/
+mosquitto/log/
+.claude/

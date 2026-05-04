@@ -17,13 +17,29 @@ services:
       - "8000:8000"
     volumes:
       - ./app:/app
-      - ./data:/data        # SQLite lives here
+      - ./data:/data
     environment:
       - MQTT_HOST=mosquitto
       - MQTT_PORT=1883
       - DB_PATH=/data/coolwatch.db
-      - CAMERA_URL=http://192.168.179.x:8080/video  # ← update with phone IP
+      - RUN_SIMULATOR=${RUN_SIMULATOR:-true}   # set false when Pi is the publisher
     depends_on:
       - mosquitto
     restart: unless-stopped
 
+  cv:
+    build: ./cv
+    container_name: coolwatch-cv
+    volumes:
+      - ./data:/data        # rois.json lives here
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - CAMERA_URL=${CAMERA_URL:-http://192.168.179.x:8080}
+      - ROOM=sendai_lab
+      - ROIS_FILE=/data/rois.json
+      - DIFF_THRESHOLD=0.05
+      - INTERVAL=2.0
+    depends_on:
+      - mosquitto
+    restart: unless-stopped

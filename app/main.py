@@ -1,7 +1,8 @@
-import asyncio, json, os
+import asyncio, json, os, time
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from database import init_db, insert_reading, insert_opening, get_readings, get_latest, get_active_alerts, resolve_alert
 from alerts import evaluate
@@ -10,7 +11,9 @@ from simulator import simulate
 MQTT_HOST = os.getenv("MQTT_HOST", "mosquitto")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 
-ROOMS = ["sendai_lab", "server_room", "meeting_room_a"]
+ROOMS = ["sendai_lab", "server_room", "meeting_room1", "meeting_room2", "office"]
+
+_room_state: dict[str, dict] = {}  # latest sensor payload per room, used for heat_leak eval on opening events
 
 class ConnectionManager:
     def __init__(self):
@@ -47,16 +50,27 @@ def on_message(client, userdata, msg):
         print(f"MQTT error: {e}")
 
 async def handle_sensors(room: str, payload: dict):
+    _room_state[room] = payload
     for key in ["temperature", "humidity", "co2", "power"]:
         if key in payload:
             await insert_reading(room, key, payload[key])
-    await evaluate(room, payload, {})
+    latest = await get_latest(room)
+    openings = {o["name"]: o["state"] for o in latest["openings"]}
+    await evaluate(room, payload, openings)
     latest = await get_latest(room)
     await manager.broadcast({"event": "update", "room": room, "data": latest})
 
 async def handle_openings(room: str, payload: dict):
     for name, state in payload.get("openings", {}).items():
         await insert_opening(room, name, state)
+    if "occupied" in payload and room in _room_state:
+        _room_state[room]["occupied"] = payload["occupied"]
+    if room in _room_state:
+        latest = await get_latest(room)
+        openings = {o["name"]: o["state"] for o in latest["openings"]}
+        await evaluate(room, _room_state[room], openings)
+    latest = await get_latest(room)
+    await manager.broadcast({"event": "update", "room": room, "data": latest})
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -68,7 +82,8 @@ async def lifespan(app: FastAPI):
     mqtt_client.subscribe("room/+/sensors")
     mqtt_client.subscribe("room/+/openings")
     mqtt_client.loop_start()
-    asyncio.create_task(simulate(mqtt_client))
+    if os.getenv("RUN_SIMULATOR", "true").lower() == "true":
+        asyncio.create_task(simulate(mqtt_client))
     yield
     mqtt_client.loop_stop()
 
@@ -104,6 +119,21 @@ async def room_alerts(room: str):
 async def resolve(alert_id: int):
     await resolve_alert(alert_id)
     return {"resolved": alert_id}
+
+class OpeningUpdate(BaseModel):
+    room: str
+    opening: str   # "door" or "window"
+    state: str     # "open" or "closed"
+
+@app.post("/simulate/opening")
+async def simulate_opening(update: OpeningUpdate):
+    payload = {
+        "timestamp": time.time(),
+        "room":      update.room,
+        "openings":  {update.opening: update.state},
+    }
+    mqtt_client.publish(f"room/{update.room}/openings", json.dumps(payload))
+    return {"triggered": payload}
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):

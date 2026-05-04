@@ -58,6 +58,12 @@ async def insert_opening(room: str, name: str, state: str):
 
 async def insert_alert(room: str, type: str, severity: str, message: str):
     async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id FROM alerts WHERE room=? AND type=? AND resolved=0",
+            (room, type)
+        )
+        if await cursor.fetchone():
+            return
         await db.execute(
             "INSERT INTO alerts (room, type, severity, message) VALUES (?,?,?,?)",
             (room, type, severity, message)
@@ -91,9 +97,8 @@ async def get_latest(room: str):
 
         cursor = await db.execute("""
             SELECT name, state, timestamp FROM openings
-            WHERE room = ?
-            AND timestamp = (
-                SELECT MAX(timestamp) FROM openings o2
+            WHERE room = ? AND id = (
+                SELECT MAX(id) FROM openings o2
                 WHERE o2.room = openings.room AND o2.name = openings.name
             )
         """, (room,))

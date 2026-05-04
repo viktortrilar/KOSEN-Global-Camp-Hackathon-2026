@@ -1,0 +1,9 @@
+# Install app + cv deps first, then this:
+#   pip install -r app/requirements.txt
+#   pip install -r requirements-dev.txt
+
+pytest>=7.4
+pytest-asyncio>=0.23
+httpx>=0.25
+Pillow>=10.0
+numpy>=1.24

@@ -1,0 +1,5 @@
+ultralytics>=8.0
+Pillow>=10.0
+numpy>=1.24
+paho-mqtt>=2.0
+requests>=2.28

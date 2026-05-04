@@ -22,14 +22,30 @@ ROOMS = {
         "ac_on":      True,
         "occupied":   False,
     },
-    "meeting_room_a": {
-        "base_temp":  24.0,
-        "base_humid": 60.0,
-        "base_co2":   600.0,
-        "base_power": 400.0,
+    "meeting_room1": {
+        "base_temp":  23.0,
+        "base_humid": 58.0,
+        "base_co2":   520.0,
+        "base_power": 500.0,
+        "ac_on":      True,
+        "occupied":   True,
+    },
+    "meeting_room2": {
+        "base_temp":  25.0,
+        "base_humid": 62.0,
+        "base_co2":   580.0,
+        "base_power": 150.0,
         "ac_on":      False,
         "occupied":   False,
-    }
+    },
+    "office": {
+        "base_temp":  21.0,
+        "base_humid": 52.0,
+        "base_co2":   480.0,
+        "base_power": 1200.0,
+        "ac_on":      True,
+        "occupied":   True,
+    },
 }
 
 def noisy(value, noise=0.5):
@@ -39,7 +55,7 @@ def day_cycle(base, amplitude):
     hour = (time.time() % 86400) / 3600
     return base + amplitude * math.sin((hour - 6) * math.pi / 12)
 
-async def simulate(client):
+async def simulate(client: mqtt.Client):
     while True:
         for room, cfg in ROOMS.items():
             sensors_payload = {
@@ -65,3 +81,11 @@ async def simulate(client):
             client.publish(f"room/{room}/openings", json.dumps(openings_payload))
 
         await asyncio.sleep(5)
+
+
+if __name__ == "__main__":
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.connect(MQTT_HOST, MQTT_PORT)
+    client.loop_start()
+    print(f"[SIM] Publishing to mqtt://{MQTT_HOST}:{MQTT_PORT} — Ctrl+C to stop")
+    asyncio.run(simulate(client))
