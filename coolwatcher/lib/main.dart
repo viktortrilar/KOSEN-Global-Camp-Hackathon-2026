@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
+import 'package:http/http.dart' as http;
+import 'package:fl_chart/fl_chart.dart';
 
 void main() {
   runApp(const EcoMonitorApp());
@@ -14,7 +16,7 @@ class EcoMonitorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Global Campus Sendai - EcoMonitor',
+      title: 'Global Campus Sendai - Cool-Watcher',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.green, useMaterial3: true),
       home: const DashboardPage(),
@@ -95,24 +97,19 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _parseMqttData(String topic, String value) {
-    // Expected format from simulator: room/{room_id}/sensors OR room/{room_id}/openings
+    // Format attendu: room/sendai_lab/sensors ou room/sendai_lab/openings
     List<String> parts = topic.split('/');
     if (parts.length < 3 || parts[0] != 'room') {
-      print('MQTT: Ignored topic - $topic');
       return;
     }
 
-    String baseRoomId = parts[1];
-    String dataType = parts[2]; // 'sensors' or 'openings'
-
-    // Ajout d'un étage par défaut (F1) pour conserver le design des dossiers
-    String floorCode = "F1";
-    String roomId = "$floorCode:$baseRoomId";
+    String roomId = parts[1];
+    String dataType = parts[2]; // 'sensors' ou 'openings'
 
     setState(() {
       if (!rooms.containsKey(roomId)) {
-        // Format the room ID into a readable name (e.g., sendai_lab -> Sendai Lab)
-        String roomName = baseRoomId.split('_').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
+        // Formatage du nom: "sendai_lab" -> "Sendai Lab"
+        String roomName = roomId.split('_').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
         rooms[roomId] = RoomData(id: roomId, name: roomName);
       }
 
@@ -142,11 +139,11 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final floors = rooms.keys.map((id) => id.split(':').first).toSet().toList()..sort();
+    final roomList = rooms.values.toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Global Campus Eco-Monitor'),
+        title: const Text('Global Campus Cool-Watcher'),
         actions: [
           Icon(Icons.circle, color: client.connectionStatus?.state == MqttConnectionState.connected ? Colors.green : Colors.red),
           const SizedBox(width: 15),
@@ -155,25 +152,19 @@ class _DashboardPageState extends State<DashboardPage> {
       body: rooms.isEmpty 
         ? const Center(child: Text("Waiting for MQTT data from RPI5..."))
         : ListView.builder(
-            itemCount: floors.length,
-            itemBuilder: (context, index) => _buildFloorFolder(floors[index]),
+            itemCount: roomList.length,
+            itemBuilder: (context, index) {
+              final room = roomList[index];
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: ListTile(
+                  leading: const Icon(Icons.meeting_room, color: Colors.orange),
+                  title: Text(room.name),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => RoomDetailPage(room: room))),
+                ),
+              );
+            },
           ),
-    );
-  }
-
-  Widget _buildFloorFolder(String floorCode) {
-    final floorRooms = rooms.values.where((r) => r.id.startsWith(floorCode)).toList();
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: ExpansionTile(
-        leading: const Icon(Icons.folder, color: Colors.orange),
-        title: Text('Floor $floorCode'),
-        children: floorRooms.map((room) => ListTile(
-          title: Text(room.name),
-          subtitle: Text(room.id),
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => RoomDetailPage(room: room))),
-        )).toList(),
-      ),
     );
   }
 }
@@ -188,6 +179,62 @@ class RoomDetailPage extends StatefulWidget {
 
 class _RoomDetailPageState extends State<RoomDetailPage> {
   String? activeGraph;
+  List<FlSpot> chartPoints = [];
+  bool isLoadingChart = false;
+
+  Future<void> _loadChartData(String sensorKey) async {
+    setState(() {
+      activeGraph = sensorKey;
+      isLoadingChart = true;
+      chartPoints = [];
+    });
+
+    // Traduction de la clé UI vers le nom attendu par l'API REST
+    String apiSensor = "";
+    switch (sensorKey) {
+      case 'TEMP': apiSensor = 'temperature'; break;
+      case 'HUM': apiSensor = 'humidity'; break;
+      case 'CO2': apiSensor = 'co2'; break;
+      case 'WATTS': apiSensor = 'power'; break;
+      default:
+        setState(() => isLoadingChart = false);
+        return;
+    }
+
+    try {
+      // On demande 1 heure entière pour éviter les erreurs de décimales dans l'API
+      final url = Uri.parse('http://192.168.179.24:8000/rooms/${widget.room.id}/history/$apiSensor?hours=1');
+      final response = await http.get(url);
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        List<dynamic> history = data['data'] ?? [];
+        
+        // Le simulateur envoie 1 point toutes les 5 secondes (12 points/minute)
+        // 30 minutes = 360 points. On coupe la liste pour ne garder que la fin !
+        if (history.length > 360) {
+          history = history.sublist(history.length - 360);
+        }
+        
+        List<FlSpot> points = [];
+        double x = 0;
+        for (var item in history) {
+          points.add(FlSpot(x, (item['value'] as num).toDouble()));
+          x += 1;
+        }
+        
+        setState(() {
+          chartPoints = points;
+          isLoadingChart = false;
+        });
+      } else {
+        setState(() => isLoadingChart = false);
+      }
+    } catch (e) {
+      print('Error fetching history: $e');
+      setState(() => isLoadingChart = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -208,14 +255,28 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
             if (activeGraph != null) ...[
               const SizedBox(height: 20),
               Container(
-                height: 200, 
+                height: 250, 
                 width: double.infinity, 
-                color: Colors.black12, 
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text("Real-time Chart: $activeGraph"),
-                    const Icon(Icons.show_chart, size: 50),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                    child: Text("30m History: $activeGraph", style: const TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                    Expanded(
+                      child: isLoadingChart 
+                        ? const Center(child: CircularProgressIndicator())
+                        : chartPoints.isEmpty 
+                          ? const Center(child: Text("No historical data available."))
+                          : Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: LineChart(_buildChartData()),
+                            ),
+                    ),
                   ],
                 ),
               )
@@ -236,7 +297,13 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
           Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
           IconButton(
             icon: Icon(Icons.query_stats, color: activeGraph == key ? Colors.green : Colors.grey),
-            onPressed: () => setState(() => activeGraph = activeGraph == key ? null : key),
+            onPressed: () {
+              if (activeGraph == key) {
+                setState(() => activeGraph = null);
+              } else {
+                _loadChartData(key);
+              }
+            },
           ),
         ],
       ),
@@ -248,6 +315,27 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
       leading: Icon(icon, color: state ? Colors.green : Colors.red),
       title: Text(label),
       trailing: Text(state ? "ON/OPEN" : "OFF/CLOSED", style: TextStyle(color: state ? Colors.green : Colors.red, fontWeight: FontWeight.bold)),
+    );
+  }
+
+  LineChartData _buildChartData() {
+    return LineChartData(
+      gridData: const FlGridData(show: true),
+      titlesData: const FlTitlesData(
+        bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)), // Cache les X pour un design épuré
+        topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+      ),
+      borderData: FlBorderData(show: true),
+      lineBarsData: [
+        LineChartBarData(
+          spots: chartPoints,
+          isCurved: true,
+          color: Colors.green,
+          barWidth: 3,
+          dotData: const FlDotData(show: false),
+        ),
+      ],
     );
   }
 }
