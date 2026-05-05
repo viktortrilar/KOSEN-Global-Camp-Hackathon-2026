@@ -36,7 +36,7 @@ services:
     environment:
       - MQTT_HOST=127.0.0.1  # mosquitto is exposed on host port 1883
       - MQTT_PORT=1883
-      - CAMERA_URL=${CAMERA_URL:-http://100.114.67.140:8080/video}
+      - CAMERA_URL=${CAMERA_URL:-http://192.168.179.18:8080/video}
       - ROOM=sendai_lab
       - ROIS_FILE=/data/rois.json
       - DIFF_THRESHOLD=0.05

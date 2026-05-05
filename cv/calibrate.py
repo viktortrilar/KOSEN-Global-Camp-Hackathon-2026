@@ -3,7 +3,7 @@ ROI calibration tool — run locally (NOT in Docker), requires a display.
 pip install opencv-python  (not headless)
 
 Usage:
-  CAMERA_URL=http://192.168.179.x:8080/video python calibrate.py
+  CAMERA_URL=http://192.168.179.18:8080/video python calibrate.py
 
 Click the top-left and bottom-right corners to define each opening region.
 Regions are saved to ROIS_FILE (default: rois.json in current dir).
@@ -13,7 +13,7 @@ Press 's' to save at any point, 'q' to quit without saving.
 """
 import cv2, json, os, sys
 
-CAMERA_URL  = os.getenv("CAMERA_URL", "http://192.168.179.x:8080/video")
+CAMERA_URL  = os.getenv("CAMERA_URL", "http://192.168.179.18:8080/video")
 ROIS_FILE   = os.getenv("ROIS_FILE",  "rois.json")
 OPENINGS   = ["door", "window"]
 
