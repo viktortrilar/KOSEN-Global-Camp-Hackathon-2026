@@ -61,7 +61,7 @@ class RoomData {
   final String name;
   double temp = 0, humidity = 0, co2 = 0, watts = 0;
   int personCount = 0;
-  bool isOccupied = false, windowOpen = false, heaterOn = false, lightOn = false;
+  bool isOccupied = false, doorOpen = false, windowOpen = false, heaterOn = false, lightOn = false;
 
   RoomData({required this.id, required this.name});
 }
@@ -163,9 +163,14 @@ class _DashboardPageState extends State<DashboardPage> {
           if (payload.containsKey('ac_on')) room.heaterOn = payload['ac_on'] as bool;
         } else if (dataType == 'openings') {
           final openings = payload['openings'] as Map<String, dynamic>;
+          if (openings.containsKey('door')) room.doorOpen = openings['door'] == 'open';
           if (openings.containsKey('window')) room.windowOpen = openings['window'] == 'open';
           if (payload.containsKey('person_count')) room.personCount = (payload['person_count'] as num).toInt();
-          if (payload.containsKey('occupied')) room.isOccupied = payload['occupied'] as bool;
+          if (payload.containsKey('occupied')) {
+            room.isOccupied = payload['occupied'] as bool;
+          } else {
+            room.isOccupied = room.personCount > 0;
+          }
         }
       } catch (e) { /* silent fail */ }
     });
@@ -208,7 +213,7 @@ class _DashboardPageState extends State<DashboardPage> {
               return Card(
                 child: ListTile(
                   title: Text(room.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('ID: ${room.id} • ${room.personCount} people • ${room.isOccupied ? "ACTIVE" : "IDLE"}'),
+                  subtitle: Text('ID: ${room.id} • ${room.personCount} people • Door: ${room.doorOpen ? "open" : "closed"}'),
                   trailing: const Icon(Icons.arrow_forward, color: MycomColors.black),
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => RoomDetailPage(room: room))),
                 ),
@@ -268,10 +273,30 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  _statusBlock('AC UNIT', widget.room.heaterOn),
-                  _statusBlock('WINDOW', widget.room.windowOpen),
-                  _statusBlock('OCCUPANCY', widget.room.isOccupied),
+                  _statusBlock('AC UNIT', widget.room.heaterOn, activeLabel: 'ON', inactiveLabel: 'OFF'),
+                  _statusBlock('DOOR', widget.room.doorOpen, activeLabel: 'OPEN', inactiveLabel: 'CLOSED'),
+                  _statusBlock('WINDOW', widget.room.windowOpen, activeLabel: 'OPEN', inactiveLabel: 'CLOSED'),
                 ],
+              ),
+            ),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                border: Border.all(color: MycomColors.borderGrey, width: 1),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('PEOPLE IN ROOM', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+                    Text(
+                      '${widget.room.personCount}',
+                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: MycomColors.black),
+                    ),
+                  ],
+                ),
               ),
             ),
             Padding(
@@ -292,15 +317,15 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     );
   }
 
-  Widget _statusBlock(String label, bool isActive) {
+  Widget _statusBlock(String label, bool isActive, {required String activeLabel, required String inactiveLabel}) {
     return Column(
       children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           color: isActive ? MycomColors.red : MycomColors.black,
           child: Text(
-            isActive ? 'ACTIVE' : 'INACTIVE', 
-            style: const TextStyle(color: MycomColors.white, fontWeight: FontWeight.bold, fontSize: 10)
+            isActive ? activeLabel : inactiveLabel,
+            style: const TextStyle(color: MycomColors.white, fontWeight: FontWeight.bold, fontSize: 10),
           ),
         ),
         const SizedBox(height: 8),
