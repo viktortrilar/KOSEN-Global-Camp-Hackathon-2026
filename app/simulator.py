@@ -52,10 +52,16 @@ def noisy(value, noise=0.5):
     return round(value + random.gauss(0, noise), 2)
 
 def door_state(room: str) -> str:
-    """Cycles sendai_lab door open for 20 s every 60 s for demo purposes."""
-    if room != "sendai_lab":
-        return "closed"
-    return "open" if int(time.time()) % 60 < 20 else "closed"
+    """Cycles demo doors open periodically so the UI can show changing state."""
+    cycles = {
+        "sendai_lab": (60, 20),
+        "meeting_room1": (90, 15),
+        "meeting_room2": (120, 10),
+        "office": (150, 12),
+        "server_room": (180, 8),
+    }
+    period, open_seconds = cycles.get(room, (60, 20))
+    return "open" if int(time.time()) % period < open_seconds else "closed"
 
 def day_cycle(base, amplitude):
     hour = (time.time() % 86400) / 3600

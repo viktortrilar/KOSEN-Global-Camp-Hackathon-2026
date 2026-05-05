@@ -214,6 +214,12 @@ python -m pytest tests/ -v
 5. Resolve alert — disappears from app
 6. Close with carbon impact calculation
 
+### Demo Simulation Notes
+
+- The room simulator now cycles door states periodically so the UI can show live opening changes even without a camera
+- `sendai_lab` opens for 20 seconds every 60 seconds
+- Other demo rooms also cycle on their own timers to keep the dashboard active during presentations
+
 ---
 
 ## Design Decisions
