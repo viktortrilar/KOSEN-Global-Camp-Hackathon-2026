@@ -23,6 +23,9 @@ INTERVAL    = float(os.getenv("INTERVAL",       "3.0"))
 PERSON_CONF = float(os.getenv("PERSON_CONF",    "0.5"))
 STREAM_PORT = int(os.getenv("STREAM_PORT",      "8001"))
 FACE_BLUR   = os.getenv("FACE_BLUR", "true").lower() == "true"
+CAMERA_MODE = os.getenv("CAMERA_MODE", "video")  # "video" or "snapshot"
+CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", "640"))
+CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
 INFER_W     = 640
 INFER_H     = 360
 
@@ -70,6 +73,12 @@ def _get_cap() -> cv2.VideoCapture:
         if _cap is not None:
             _cap.release()
         _cap = cv2.VideoCapture(CAMERA_URL)
+        # try to request a lower resolution from the camera stream
+        try:
+            _cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+            _cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+        except Exception:
+            pass
     return _cap
 
 
@@ -77,8 +86,23 @@ def fetch_frame() -> tuple[np.ndarray | None, np.ndarray | None]:
     """Returns (bgr, gray) numpy arrays, or (None, None) on failure."""
     global _cap
     try:
-        cap = _get_cap()
-        ret, frame = cap.read()
+        if CAMERA_MODE == "snapshot":
+            # fetch single JPEG via HTTP (IP Webcam: /shot.jpg)
+            import requests
+
+            url = CAMERA_URL.rstrip("/")
+            if url.endswith("/video"):
+                # convert video URL to base for shot.jpg
+                url = url[: url.rfind("/")]
+            resp = requests.get(url + "/shot.jpg", timeout=3)
+            if resp.status_code != 200:
+                return None, None
+            arr = np.frombuffer(resp.content, np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            ret = frame is not None
+        else:
+            cap = _get_cap()
+            ret, frame = cap.read()
         if not ret or frame is None:
             _cap = None
             return None, None
