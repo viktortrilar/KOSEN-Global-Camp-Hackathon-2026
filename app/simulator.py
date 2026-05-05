@@ -82,9 +82,15 @@ async def simulate(client: mqtt.Client):
             }
             client.publish(f"room/{room}/sensors", json.dumps(sensors_payload))
 
+            # Keep sendai_lab openings owned by the CV service so the live
+            # person count and door state are not overwritten by the demo simulator.
+            if room == "sendai_lab":
+                continue
+
             openings_payload = {
                 "timestamp":    time.time(),
                 "room":         room,
+                "source":       "simulator",
                 "occupied":     cfg["occupied"],
                 "person_count": 0,
                 "openings":     {

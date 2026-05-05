@@ -368,6 +368,7 @@ def inference_loop(rois: dict, client: mqtt.Client):
         payload = {
             "timestamp":    time.time(),
             "room":         ROOM,
+            "source":       "cv",
             "occupied":     count > 0,
             "person_count": count,
             "openings":     openings,

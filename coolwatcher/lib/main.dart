@@ -154,6 +154,7 @@ class _DashboardPageState extends State<DashboardPage> {
       final room = rooms[roomId]!;
       try {
         final Map<String, dynamic> payload = jsonDecode(value);
+        final String source = (payload['source'] ?? 'unknown').toString();
         if (dataType == 'sensors') {
           if (payload.containsKey('temperature')) room.temp = (payload['temperature'] as num).toDouble();
           if (payload.containsKey('humidity')) room.humidity = (payload['humidity'] as num).toDouble();
@@ -165,10 +166,12 @@ class _DashboardPageState extends State<DashboardPage> {
           final openings = payload['openings'] as Map<String, dynamic>;
           if (openings.containsKey('door')) room.doorOpen = openings['door'] == 'open';
           if (openings.containsKey('window')) room.windowOpen = openings['window'] == 'open';
-          if (payload.containsKey('person_count')) room.personCount = (payload['person_count'] as num).toInt();
-          if (payload.containsKey('occupied')) {
+          if (source == 'cv' && payload.containsKey('person_count')) {
+            room.personCount = (payload['person_count'] as num).toInt();
+          }
+          if (source == 'cv' && payload.containsKey('occupied')) {
             room.isOccupied = payload['occupied'] as bool;
-          } else {
+          } else if (source != 'cv' && room.personCount == 0) {
             room.isOccupied = room.personCount > 0;
           }
         }
