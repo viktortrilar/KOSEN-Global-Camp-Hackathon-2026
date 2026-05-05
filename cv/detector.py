@@ -1,11 +1,7 @@
 """
 CoolWatch CV detector.
-- Camera reader thread  → feeds raw frames at camera FPS
-- Inference loop        → YOLO on 640×360 resized frames, updates box state
-- Stream encoder thread → overlays boxes on raw frames, encodes at ~30fps
-- MJPEG server          → serves annotated stream on :STREAM_PORT
-
-Publishes room/{ROOM}/openings with person_count (int) and occupied (bool).
+Grabs a frame every INTERVAL seconds, runs YOLO, blurs faces, publishes MQTT,
+and serves the annotated frame as an MJPEG stream / snapshot on :STREAM_PORT.
 """
 import os, time, json, socketserver, threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -23,9 +19,10 @@ MQTT_PORT   = int(os.getenv("MQTT_PORT", 1883))
 ROOM        = os.getenv("ROOM",        "sendai_lab")
 ROIS_FILE   = os.getenv("ROIS_FILE",   "/data/rois.json")
 THRESHOLD   = float(os.getenv("DIFF_THRESHOLD", "0.05"))
-INTERVAL    = float(os.getenv("INTERVAL",       "0.0"))   # 0 = as fast as possible
+INTERVAL    = float(os.getenv("INTERVAL",       "3.0"))
 PERSON_CONF = float(os.getenv("PERSON_CONF",    "0.5"))
 STREAM_PORT = int(os.getenv("STREAM_PORT",      "8001"))
+FACE_BLUR   = os.getenv("FACE_BLUR", "true").lower() == "true"
 INFER_W     = 640
 INFER_H     = 360
 
@@ -34,15 +31,6 @@ model = YOLO("yolov8n.pt")
 print("[CV] Model ready.")
 
 # ── shared state ──────────────────────────────────────────────────────────────
-
-_raw_lock  = threading.Lock()
-_raw_frame: np.ndarray | None = None
-_raw_gray:  np.ndarray | None = None
-
-_det_lock        = threading.Lock()
-_person_count: int        = 0
-_opening_states: dict     = {}
-_yolo_boxes: list         = []   # [(x1,y1,x2,y2,conf), ...] at full resolution
 
 _frame_lock            = threading.Lock()
 _latest_jpeg: bytes | None = None
@@ -95,67 +83,33 @@ def detect_person(bgr: np.ndarray) -> tuple[int, np.ndarray]:
     return len(results[0].boxes), results[0].plot()
 
 
+def blur_faces(frame: np.ndarray, person_boxes: list) -> np.ndarray:
+    """Pixelate the top quarter of each person bounding box (approximate face region)."""
+    if not FACE_BLUR:
+        return frame
+    for (x1, y1, x2, y2, _) in person_boxes:
+        face_y2 = y1 + max(1, (y2 - y1) // 4)
+        fx1 = max(0, x1)
+        fy1 = max(0, y1)
+        fx2 = min(frame.shape[1], x2)
+        fy2 = min(frame.shape[0], face_y2)
+        roi = frame[fy1:fy2, fx1:fx2]
+        if roi.size == 0:
+            continue
+        small_w = max(1, (fx2 - fx1) // 16)
+        small_h = max(1, (fy2 - fy1) // 16)
+        tiny = cv2.resize(roi, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+        frame[fy1:fy2, fx1:fx2] = cv2.resize(
+            tiny, (fx2 - fx1, fy2 - fy1), interpolation=cv2.INTER_NEAREST
+        )
+    return frame
+
+
 def diff_ratio(ref: np.ndarray, cur: np.ndarray, roi: list[int]) -> float:
     x1, y1, x2, y2 = roi
     a = ref[y1:y2, x1:x2].astype(np.int16)
     b = cur[y1:y2, x1:x2].astype(np.int16)
     return float((np.abs(a - b) > 30).mean())
-
-
-# ── threads ───────────────────────────────────────────────────────────────────
-
-def camera_reader():
-    """Continuously reads frames from the camera into shared state."""
-    global _raw_frame, _raw_gray
-    while True:
-        bgr, gray = fetch_frame()
-        if bgr is not None:
-            with _raw_lock:
-                _raw_frame = bgr
-                _raw_gray  = gray
-        else:
-            time.sleep(0.05)
-
-
-def stream_encoder(rois: dict):
-    """Renders raw frames with the latest detection overlay at ~30fps."""
-    global _latest_jpeg
-    while True:
-        with _raw_lock:
-            if _raw_frame is None:
-                time.sleep(0.033)
-                continue
-            frame = _raw_frame.copy()
-
-        with _det_lock:
-            count  = _person_count
-            boxes  = list(_yolo_boxes)
-            states = dict(_opening_states)
-
-        # YOLO person boxes
-        for (x1, y1, x2, y2, conf) in boxes:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, f"person {conf:.2f}", (x1, max(y1 - 6, 14)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-
-        # Door/window ROI boxes (red = open, green = closed)
-        for name, state in states.items():
-            if name in rois:
-                x1, y1, x2, y2 = rois[name]
-                color = (0, 0, 255) if state == "open" else (0, 200, 0)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"{name}: {state}", (x1, y1 - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-        cv2.putText(frame, f"People: {count}", (10, 34),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 255), 2)
-
-        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        if ok:
-            with _frame_lock:
-                _latest_jpeg = buf.tobytes()
-
-        time.sleep(0.033)  # ~30fps cap
 
 
 # ── MJPEG server ──────────────────────────────────────────────────────────────
@@ -190,7 +144,7 @@ class _StreamHandler(BaseHTTPRequestHandler):
                     self.wfile.write(
                         b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
                     )
-                time.sleep(0.033)
+                time.sleep(0.1)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -217,35 +171,29 @@ def start_stream_server():
 # ── inference loop (main thread) ──────────────────────────────────────────────
 
 def inference_loop(rois: dict, client: mqtt.Client):
-    global _person_count, _opening_states, _yolo_boxes
+    global _latest_jpeg
 
-    # Wait for first camera frame
     print(f"[CV] Waiting for stream at {CAMERA_URL}...")
-    while True:
-        with _raw_lock:
-            if _raw_gray is not None:
-                reference = _raw_gray.copy()
-                break
-        time.sleep(0.05)
-    print("[CV] Reference frame captured.")
+    reference = None
 
     while True:
         t0 = time.time()
 
-        with _raw_lock:
-            if _raw_frame is None:
-                time.sleep(0.05)
-                continue
-            bgr  = _raw_frame.copy()
-            gray = _raw_gray.copy()
+        bgr, gray = fetch_frame()
+        if bgr is None:
+            time.sleep(0.5)
+            continue
 
-        # Resize for faster inference, scale boxes back to full resolution
-        h, w   = bgr.shape[:2]
-        small  = cv2.resize(bgr, (INFER_W, INFER_H))
+        if reference is None:
+            reference = gray.copy()
+            print("[CV] Reference frame captured.")
+
+        h, w  = bgr.shape[:2]
+        small = cv2.resize(bgr, (INFER_W, INFER_H))
         sx, sy = w / INFER_W, h / INFER_H
 
         results = model.predict(small, verbose=False, conf=PERSON_CONF, classes=[0])
-        boxes   = []
+        boxes = []
         for box in results[0].boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             conf = float(box.conf[0])
@@ -257,10 +205,29 @@ def inference_loop(rois: dict, client: mqtt.Client):
             for name, roi in rois.items()
         }
 
-        with _det_lock:
-            _person_count   = count
-            _opening_states = openings
-            _yolo_boxes     = boxes
+        frame = bgr.copy()
+        blur_faces(frame, boxes)
+
+        for (x1, y1, x2, y2, conf) in boxes:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"person {conf:.2f}", (x1, max(y1 - 6, 14)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+
+        for name, state in openings.items():
+            if name in rois:
+                x1, y1, x2, y2 = rois[name]
+                color = (0, 0, 255) if state == "open" else (0, 200, 0)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{name}: {state}", (x1, y1 - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        cv2.putText(frame, f"People: {count}", (10, 34),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 255), 2)
+
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            with _frame_lock:
+                _latest_jpeg = buf.tobytes()
 
         payload = {
             "timestamp":    time.time(),
@@ -271,22 +238,16 @@ def inference_loop(rois: dict, client: mqtt.Client):
         }
         client.publish(f"room/{ROOM}/openings", json.dumps(payload))
         print(f"[CV] {ROOM} — people: {count}, openings: {openings}, "
-              f"inference: {(time.time()-t0)*1000:.0f}ms")
+              f"total: {(time.time()-t0)*1000:.0f}ms")
 
         elapsed = time.time() - t0
-        if INTERVAL > 0:
-            time.sleep(max(0.0, INTERVAL - elapsed))
+        time.sleep(max(0.0, INTERVAL - elapsed))
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    global _latest_jpeg
     rois = load_rois()
-
-    threading.Thread(target=camera_reader,          daemon=True).start()
-    threading.Thread(target=stream_encoder, args=(rois,), daemon=True).start()
-
     start_stream_server()
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)

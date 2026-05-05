@@ -108,6 +108,8 @@ CAMERA_URL=http://<phone-ip>:8080/video python cv/calibrate.py
 | `detector.py` | YOLOv8n person detection + frame diff for door/window — runs on laptop |
 | `calibrate.py` | GUI tool to define door/window ROIs — run locally before demo |
 
+The CV stream now blurs detected faces by default for privacy. Set `FACE_BLUR=false` only if you need the raw feed for debugging.
+
 **No OpenCV in the container** — uses `Pillow + numpy + requests` (~40MB) to poll `shot.jpg`.  
 YOLOv8n model (~6MB) downloads automatically on first run and is cached in `./data/yolo/`.
 

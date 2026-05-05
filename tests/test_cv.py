@@ -149,3 +149,28 @@ def test_detect_person_passes_correct_args():
     assert kwargs["classes"] == [0]
     assert kwargs["verbose"]  is False
     assert kwargs["conf"]     == detector.PERSON_CONF
+
+
+# ── blur_faces ───────────────────────────────────────────────────────────────
+
+def test_blur_faces_pixelates_top_quarter_of_person_box():
+    frame = np.random.randint(0, 255, (200, 200, 3), dtype=np.uint8)
+    original = frame.copy()
+    boxes = [(10, 0, 190, 100, 0.9)]  # face region: y=0..25
+
+    with patch.object(detector, "FACE_BLUR", True):
+        blurred = detector.blur_faces(frame, boxes)
+
+    assert blurred is frame
+    assert not np.array_equal(blurred[5:20, 50:150], original[5:20, 50:150])
+    assert np.array_equal(blurred[60:100, 10:190], original[60:100, 10:190])
+
+
+def test_blur_faces_noop_when_disabled():
+    frame = np.random.randint(0, 255, (80, 100, 3), dtype=np.uint8)
+    original = frame.copy()
+
+    with patch.object(detector, "FACE_BLUR", False):
+        blurred = detector.blur_faces(frame, [(10, 10, 90, 70, 0.9)])
+
+    assert np.array_equal(blurred, original)

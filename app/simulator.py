@@ -51,6 +51,12 @@ ROOMS = {
 def noisy(value, noise=0.5):
     return round(value + random.gauss(0, noise), 2)
 
+def door_state(room: str) -> str:
+    """Cycles sendai_lab door open for 20 s every 60 s for demo purposes."""
+    if room != "sendai_lab":
+        return "closed"
+    return "open" if int(time.time()) % 60 < 20 else "closed"
+
 def day_cycle(base, amplitude):
     hour = (time.time() % 86400) / 3600
     return base + amplitude * math.sin((hour - 6) * math.pi / 12)
@@ -74,9 +80,9 @@ async def simulate(client: mqtt.Client):
                 "timestamp": time.time(),
                 "room":      room,
                 "openings":  {
-                    "door":   "closed",
+                    "door":   door_state(room),
                     "window": "closed",
-                }
+                },
             }
             client.publish(f"room/{room}/openings", json.dumps(openings_payload))
 

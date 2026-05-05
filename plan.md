@@ -1,6 +1,6 @@
 # CoolWatch — Project Plan
 > AI-readable project document for KOSEN Global Camp Hackathon 2026
-> Last updated: 2026-05-04
+> Last updated: 2026-05-05
 
 ---
 
@@ -205,6 +205,7 @@ GET /rooms/Lab/history/temperature
 **Method:** Frame differencing (OpenCV) — no model training required.  
 **Input:** MJPEG stream from phone (IP Webcam app on Android, port 8080).  
 **Output:** Publishes to `coolwatch/{room}` MQTT topic, updating `openings.door` and `openings.window`.  
+**Privacy:** The annotated CV stream blurs detected faces by default (`FACE_BLUR=true`).
 
 ### How Frame Differencing Works
 
@@ -291,6 +292,8 @@ Server Room intentionally has `ac_on=true` + `occupied=false` to trigger `empty_
 - REST API (rooms, history, alerts, resolve)
 - WebSocket broadcast
 - Docker Compose stack
+- CV stream face blurring enabled by default for privacy
+- Demo simulator can cycle the sendai_lab door state for presentation purposes
 
 ### In Progress 🔄
 - Flutter app (teammate — MQTT + REST integration)
