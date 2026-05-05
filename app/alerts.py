@@ -2,7 +2,7 @@ from database import insert_alert
 
 COST_PER_WH = 28.93 / 1000  # ¥28.93/kWh → ¥0.02893/Wh (Japan commercial rate)
 
-async def evaluate(room: str, sensors: dict, openings: dict):
+async def evaluate(room: str, sensors: dict, openings: dict, person_count: int = 0):
     alerts = []
 
     temp     = sensors.get("temperature", 0)
@@ -24,6 +24,11 @@ async def evaluate(room: str, sensors: dict, openings: dict):
     if not occupied and ac_on and power > 200:
         msg = f"Room empty but AC running — ¥{cost_per_hour}/hr wasted"
         alerts.append({"type": "empty_room", "severity": "medium", "message": msg})
+
+    # High occupancy — AC may need adjustment
+    if person_count >= 5 and ac_on:
+        msg = f"{person_count} people detected — consider lowering AC setpoint to compensate"
+        alerts.append({"type": "high_occupancy", "severity": "medium", "message": msg})
 
     # CO2 levels
     if co2 > 1500:

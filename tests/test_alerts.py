@@ -145,6 +145,32 @@ async def test_humidity_boundary():
     assert not any(a["type"] == "humidity_high" for a in alerts)
 
 
+# ── high_occupancy ────────────────────────────────────────────────────────────
+
+async def test_high_occupancy_fires():
+    alerts = await evaluate("lab", NORMAL, {}, person_count=5)
+    assert any(a["type"] == "high_occupancy" for a in alerts)
+
+async def test_high_occupancy_message_contains_count():
+    alerts = await evaluate("lab", NORMAL, {}, person_count=7)
+    msg = next(a for a in alerts if a["type"] == "high_occupancy")["message"]
+    assert "7" in msg
+
+async def test_high_occupancy_below_threshold_no_fire():
+    alerts = await evaluate("lab", NORMAL, {}, person_count=4)
+    assert not any(a["type"] == "high_occupancy" for a in alerts)
+
+async def test_high_occupancy_no_fire_when_ac_off():
+    sensors = {**NORMAL, "ac_on": False}
+    alerts = await evaluate("lab", sensors, {}, person_count=10)
+    assert not any(a["type"] == "high_occupancy" for a in alerts)
+
+async def test_high_occupancy_severity():
+    alerts = await evaluate("lab", NORMAL, {}, person_count=5)
+    alert = next(a for a in alerts if a["type"] == "high_occupancy")
+    assert alert["severity"] == "medium"
+
+
 # ── clean conditions ──────────────────────────────────────────────────────────
 
 async def test_no_alerts_normal_conditions():

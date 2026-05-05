@@ -63,12 +63,15 @@ async def handle_sensors(room: str, payload: dict):
 async def handle_openings(room: str, payload: dict):
     for name, state in payload.get("openings", {}).items():
         await insert_opening(room, name, state)
-    if "occupied" in payload and room in _room_state:
-        _room_state[room]["occupied"] = payload["occupied"]
     if room in _room_state:
+        if "occupied" in payload:
+            _room_state[room]["occupied"] = payload["occupied"]
+        if "person_count" in payload:
+            _room_state[room]["person_count"] = payload["person_count"]
         latest = await get_latest(room)
         openings = {o["name"]: o["state"] for o in latest["openings"]}
-        await evaluate(room, _room_state[room], openings)
+        person_count = _room_state[room].get("person_count", 0)
+        await evaluate(room, _room_state[room], openings, person_count)
     latest = await get_latest(room)
     await manager.broadcast({"event": "update", "room": room, "data": latest})
 
@@ -96,7 +99,12 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "mqtt": "connected", "db": "connected"}
+    return {
+        "status": "ok",
+        "mqtt": "connected",
+        "db": "connected",
+        "cv_stream": os.getenv("CV_STREAM_URL", ""),
+    }
 
 @app.get("/rooms")
 async def list_rooms():

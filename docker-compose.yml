@@ -23,6 +23,7 @@ services:
       - MQTT_PORT=1883
       - DB_PATH=/data/coolwatch.db
       - RUN_SIMULATOR=${RUN_SIMULATOR:-true}   # set false when Pi is the publisher
+      - CV_STREAM_URL=${CV_STREAM_URL:-http://localhost:8001/stream}
     depends_on:
       - mosquitto
     restart: unless-stopped
@@ -41,4 +42,5 @@ services:
       - ROIS_FILE=/data/rois.json
       - DIFF_THRESHOLD=0.05
       - INTERVAL=2.0
+      - STREAM_PORT=8001
     restart: unless-stopped
