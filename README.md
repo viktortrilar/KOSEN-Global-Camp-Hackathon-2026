@@ -105,13 +105,41 @@ CAMERA_URL=http://<phone-ip>:8080/video python cv/calibrate.py
 
 | File | Purpose |
 |---|---|
-| `detector.py` | YOLOv8n person detection + frame diff for door/window — runs on laptop |
+| `detector.py` | YOLOv8n person detection + frame diff for door/window — publishes person count to MQTT |
 | `calibrate.py` | GUI tool to define door/window ROIs — run locally before demo |
 
-The CV stream now blurs detected faces by default for privacy. Set `FACE_BLUR=false` only if you need the raw feed for debugging.
+**Privacy & Stability:**
+- Face blur enabled by default (`FACE_BLUR=true`) using Haar cascade + temporal smoothing to reduce jitter
+- Detects faces on downscaled frame (fast) and smooths detection history over 3 frames (default `SMOOTH_WINDOW`)
+- Publishes `person_count` in `room/{room}/openings` payload for Flutter app to display
 
-**No OpenCV in the container** — uses `Pillow + numpy + requests` (~40MB) to poll `shot.jpg`.  
+**Performance Tuning:**
+- `INFER_W=640, INFER_H=360` — inference frame size (resize input before YOLO)
+- `STREAM_W/STREAM_H` — optional resize of output MJPEG stream for lower bandwidth
+- `HAAR_MIN_NEIGHBORS=4, HAAR_MIN_SIZE=24` — Haar cascade sensitivity
+- Customize via `docker-compose.yml` env vars or command-line
+
 YOLOv8n model (~6MB) downloads automatically on first run and is cached in `./data/yolo/`.
+
+### Flutter App (`coolwatcher/`)
+
+**Real-time MQTT subscriptions:**
+- Subscribes to `room/+/sensors` — receives temperature, humidity, CO₂, power, AC status
+- Subscribes to `room/+/openings` — receives door/window state and **person count**
+
+**Dashboard display:**
+- Lists all 5 rooms with live occupancy: `"ID: sendai_lab • 3 people • ACTIVE"`
+- Tap room → detailed view with sensor history charts (1-hour window)
+- Tap chart buttons to switch between temperature, humidity, CO₂, and power consumption
+
+**Build & run:**
+```bash
+cd coolwatcher
+flutter pub get
+flutter run -d <device>
+```
+
+Broker IP is hardcoded to `192.168.179.24` in `lib/main.dart`; update for your network.
 
 ---
 

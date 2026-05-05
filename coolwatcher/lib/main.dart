@@ -57,6 +57,7 @@ class RoomData {
   final String id;
   final String name;
   double temp = 0, humidity = 0, co2 = 0, watts = 0;
+  int personCount = 0;
   bool isOccupied = false, windowOpen = false, heaterOn = false, lightOn = false;
 
   RoomData({required this.id, required this.name});
@@ -98,7 +99,8 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     if (client.connectionStatus!.state == MqttConnectionState.connected) {
-      client.subscribe("#", MqttQos.atMostOnce);
+      client.subscribe("room/+/sensors", MqttQos.atLeastOnce);
+      client.subscribe("room/+/openings", MqttQos.atLeastOnce);
       client.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
         final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
         final String pt = MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
@@ -132,6 +134,8 @@ class _DashboardPageState extends State<DashboardPage> {
         } else if (dataType == 'openings') {
           final openings = payload['openings'] as Map<String, dynamic>;
           if (openings.containsKey('window')) room.windowOpen = openings['window'] == 'open';
+          if (payload.containsKey('person_count')) room.personCount = (payload['person_count'] as num).toInt();
+          if (payload.containsKey('occupied')) room.isOccupied = payload['occupied'] as bool;
         }
       } catch (e) { /* silent fail */ }
     });
@@ -174,7 +178,7 @@ class _DashboardPageState extends State<DashboardPage> {
               return Card(
                 child: ListTile(
                   title: Text(room.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900)),
-                  subtitle: Text('ID: ${room.id} • ${room.isOccupied ? "ACTIVE" : "IDLE"}'),
+                  subtitle: Text('ID: ${room.id} • ${room.personCount} people • ${room.isOccupied ? "ACTIVE" : "IDLE"}'),
                   trailing: const Icon(Icons.arrow_forward, color: MycomColors.black),
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => RoomDetailPage(room: room))),
                 ),

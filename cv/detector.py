@@ -10,6 +10,7 @@ os.environ.setdefault("YOLO_CONFIG_DIR", "/data/yolo")
 
 import cv2
 import numpy as np
+from collections import deque
 import paho.mqtt.client as mqtt
 from ultralytics import YOLO
 
@@ -23,11 +24,15 @@ INTERVAL    = float(os.getenv("INTERVAL",       "3.0"))
 PERSON_CONF = float(os.getenv("PERSON_CONF",    "0.5"))
 STREAM_PORT = int(os.getenv("STREAM_PORT",      "8001"))
 FACE_BLUR   = os.getenv("FACE_BLUR", "true").lower() == "true"
-CAMERA_MODE = os.getenv("CAMERA_MODE", "video")  # "video" or "snapshot"
-CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", "640"))
-CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
 INFER_W     = 640
 INFER_H     = 360
+STREAM_W    = int(os.getenv("STREAM_W", str(INFER_W)))
+STREAM_H    = int(os.getenv("STREAM_H", str(INFER_H)))
+
+# Haar tuning and temporal smoothing
+HAAR_MIN_NEIGHBORS = int(os.getenv("HAAR_MIN_NEIGHBORS", "4"))
+HAAR_MIN_SIZE = int(os.getenv("HAAR_MIN_SIZE", "24"))
+SMOOTH_WINDOW = int(os.getenv("SMOOTH_WINDOW", "3"))
 
 print("[CV] Loading YOLOv8n model...")
 model = YOLO("yolov8n.pt")
@@ -53,6 +58,9 @@ _latest_jpeg: bytes | None = None
 
 _cap = None
 
+# temporal face history (stores lists of face rects in full-frame coords)
+_face_history: deque[list] = deque(maxlen=SMOOTH_WINDOW)
+
 
 # ── camera I/O ────────────────────────────────────────────────────────────────
 
@@ -73,12 +81,6 @@ def _get_cap() -> cv2.VideoCapture:
         if _cap is not None:
             _cap.release()
         _cap = cv2.VideoCapture(CAMERA_URL)
-        # try to request a lower resolution from the camera stream
-        try:
-            _cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-            _cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-        except Exception:
-            pass
     return _cap
 
 
@@ -86,23 +88,8 @@ def fetch_frame() -> tuple[np.ndarray | None, np.ndarray | None]:
     """Returns (bgr, gray) numpy arrays, or (None, None) on failure."""
     global _cap
     try:
-        if CAMERA_MODE == "snapshot":
-            # fetch single JPEG via HTTP (IP Webcam: /shot.jpg)
-            import requests
-
-            url = CAMERA_URL.rstrip("/")
-            if url.endswith("/video"):
-                # convert video URL to base for shot.jpg
-                url = url[: url.rfind("/")]
-            resp = requests.get(url + "/shot.jpg", timeout=3)
-            if resp.status_code != 200:
-                return None, None
-            arr = np.frombuffer(resp.content, np.uint8)
-            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            ret = frame is not None
-        else:
-            cap = _get_cap()
-            ret, frame = cap.read()
+        cap = _get_cap()
+        ret, frame = cap.read()
         if not ret or frame is None:
             _cap = None
             return None, None
@@ -271,6 +258,7 @@ def inference_loop(rois: dict, client: mqtt.Client):
         h, w  = bgr.shape[:2]
         small = cv2.resize(bgr, (INFER_W, INFER_H))
         sx, sy = w / INFER_W, h / INFER_H
+        small_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
         results = model.predict(small, verbose=False, conf=PERSON_CONF, classes=[0])
         boxes = []
@@ -286,7 +274,63 @@ def inference_loop(rois: dict, client: mqtt.Client):
         }
 
         frame = bgr.copy()
-        blur_faces(frame, boxes)
+
+        # Improved face localization: run Haar on the downscaled inference image
+        # (fast) and keep a short temporal history of detections to smooth jitter.
+        faces_full = []
+        if _FACE_CASCADE is not None:
+            faces_small = _FACE_CASCADE.detectMultiScale(
+                small_gray,
+                scaleFactor=1.1,
+                minNeighbors=HAAR_MIN_NEIGHBORS,
+                minSize=(HAAR_MIN_SIZE, HAAR_MIN_SIZE),
+            )
+            for (fx, fy, fw, fh) in faces_small:
+                x1 = int(fx * sx)
+                y1 = int(fy * sy)
+                x2 = int((fx + fw) * sx)
+                y2 = int((fy + fh) * sy)
+                faces_full.append((x1, y1, x2, y2))
+
+        # if no Haar faces found this frame, fall back to person-box approx
+        if not faces_full and boxes:
+            for (bx1, by1, bx2, by2, _) in boxes:
+                box_h = max(1, by2 - by1)
+                start_y = by1 + int(box_h * 0.08)
+                face_h = max(1, int(box_h * 0.22))
+                fy1 = max(0, start_y)
+                fy2 = min(h, start_y + face_h)
+                faces_full.append((bx1, fy1, bx2, fy2))
+
+        # push to temporal history and build a merged mask across recent frames
+        _face_history.append(faces_full)
+        # build mask
+        mask = np.zeros((h, w), dtype=np.uint8)
+        for rects in _face_history:
+            for (x1, y1, x2, y2) in rects:
+                cv2.rectangle(mask, (max(0, x1), max(0, y1)), (min(w - 1, x2), min(h - 1, y2)), 255, -1)
+
+        # find merged contours on mask and pixelate their bounding boxes
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            x, y, cw, ch = cv2.boundingRect(c)
+            # trim hair area: crop top and bottom a bit
+            top_crop = int(ch * 0.12)
+            bottom_crop = int(ch * 0.08)
+            y1 = max(0, y + top_crop)
+            y2 = min(h, y + cw + ch - bottom_crop) if False else min(h, y + ch - bottom_crop)
+            x1 = max(0, x)
+            x2 = min(w, x + cw)
+            # ensure valid
+            if y2 <= y1 or x2 <= x1:
+                continue
+            roi = frame[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+            small_w = max(1, (x2 - x1) // 12)
+            small_h = max(1, (y2 - y1) // 12)
+            tiny = cv2.resize(roi, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+            frame[y1:y2, x1:x2] = cv2.resize(tiny, (x2 - x1, y2 - y1), interpolation=cv2.INTER_NEAREST)
 
         for (x1, y1, x2, y2, conf) in boxes:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -306,8 +350,20 @@ def inference_loop(rois: dict, client: mqtt.Client):
 
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         if ok:
-            with _frame_lock:
-                _latest_jpeg = buf.tobytes()
+            # Resize the encoded stream to STREAM_W/STREAM_H for lower bandwidth
+            if STREAM_W != w or STREAM_H != h:
+                img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                img_small = cv2.resize(img, (STREAM_W, STREAM_H))
+                ok2, buf2 = cv2.imencode(".jpg", img_small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if ok2:
+                    with _frame_lock:
+                        _latest_jpeg = buf2.tobytes()
+                else:
+                    with _frame_lock:
+                        _latest_jpeg = buf.tobytes()
+            else:
+                with _frame_lock:
+                    _latest_jpeg = buf.tobytes()
 
         payload = {
             "timestamp":    time.time(),
