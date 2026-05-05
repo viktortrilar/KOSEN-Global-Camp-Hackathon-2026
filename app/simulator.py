@@ -77,9 +77,11 @@ async def simulate(client: mqtt.Client):
             client.publish(f"room/{room}/sensors", json.dumps(sensors_payload))
 
             openings_payload = {
-                "timestamp": time.time(),
-                "room":      room,
-                "openings":  {
+                "timestamp":    time.time(),
+                "room":         room,
+                "occupied":     cfg["occupied"],
+                "person_count": 0,
+                "openings":     {
                     "door":   door_state(room),
                     "window": "closed",
                 },
