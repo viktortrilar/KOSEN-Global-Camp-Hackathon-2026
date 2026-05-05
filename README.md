@@ -74,16 +74,16 @@ MQTT_HOST=<laptop-LAN-ip> python app/simulator.py
 
 1. Install **IP Webcam** (Android, Pavel Khlebovich) from Google Play
 2. Open → scroll to bottom → **Start server**
-3. Note the IP shown, e.g. `http://192.168.1.42:8080`
-4. Verify: open `http://192.168.1.42:8080/shot.jpg` in your browser
-5. Set `CAMERA_URL` in `docker-compose.yml` or pass as env var
+3. Note the IP shown, e.g. `192.168.1.42`
+4. Verify stream: open `http://192.168.1.42:8080/video` in your browser (MJPEG preview)
+5. Set `CAMERA_URL=http://192.168.1.42:8080/video` in `docker-compose.yml` or as an env var
 
 ### CV calibration (defines door/window regions)
 
 Run locally — requires `pip install opencv-python`:
 
 ```bash
-CAMERA_URL=http://<phone-ip>:8080 python cv/calibrate.py
+CAMERA_URL=http://<phone-ip>:8080/video python cv/calibrate.py
 # Click 2 corners for door, then 2 corners for window
 # Saves rois.json — copy it to ./data/ before starting the CV container
 ```
