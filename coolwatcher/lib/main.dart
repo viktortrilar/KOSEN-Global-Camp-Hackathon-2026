@@ -72,13 +72,43 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   final String brokerIp = "192.168.179.24"; 
+  final String apiBase = "http://192.168.179.24:8000";
   late MqttServerClient client;
   Map<String, RoomData> rooms = {};
 
   @override
   void initState() {
     super.initState();
+    _loadRoomsFromApi();
     _setupMqtt();
+  }
+
+  String _roomLabel(String roomId) {
+    return roomId
+        .split('_')
+        .where((part) => part.isNotEmpty)
+        .map((part) => part[0].toUpperCase() + part.substring(1))
+        .join(' ');
+  }
+
+  Future<void> _loadRoomsFromApi() async {
+    try {
+      final response = await http.get(Uri.parse('$apiBase/rooms'));
+      if (response.statusCode != 200) return;
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final List<dynamic> roomIds = data['rooms'] as List<dynamic>;
+
+      if (!mounted) return;
+      setState(() {
+        for (final roomIdValue in roomIds) {
+          final roomId = roomIdValue.toString();
+          rooms.putIfAbsent(roomId, () => RoomData(id: roomId, name: _roomLabel(roomId)));
+        }
+      });
+    } catch (e) {
+      // keep MQTT-only fallback if the API is unavailable
+    }
   }
 
   Future<void> _setupMqtt() async {
@@ -118,8 +148,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
     setState(() {
       if (!rooms.containsKey(roomId)) {
-        String roomName = roomId.split('_').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
-        rooms[roomId] = RoomData(id: roomId, name: roomName);
+        rooms[roomId] = RoomData(id: roomId, name: _roomLabel(roomId));
       }
       final room = rooms[roomId]!;
       try {
@@ -207,7 +236,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     String apiSensor = {'TEMP': 'temperature', 'HUM': 'humidity', 'CO2': 'co2', 'WATTS': 'power'}[sensorKey] ?? "";
     
     try {
-      final url = Uri.parse('http://192.168.179.24:8000/rooms/${widget.room.id}/history/$apiSensor?hours=1');
+      final url = Uri.parse('$apiBase/rooms/${widget.room.id}/history/$apiSensor?hours=1');
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
