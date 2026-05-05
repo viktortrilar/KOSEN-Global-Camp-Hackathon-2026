@@ -59,6 +59,19 @@ docker compose up -d
 # Simulator runs inside the app container (RUN_SIMULATOR=true default)
 ```
 
+### Option A1 — Auto-detect LAN IP and start demo
+
+```bash
+./scripts/start-demo.sh
+```
+
+This helper detects the current machine’s LAN IP, starts Docker, and prints the matching Flutter command.
+To auto-launch Flutter too:
+
+```bash
+RUN_FLUTTER=true ./scripts/start-demo.sh -d <device>
+```
+
 ### Option B — Pi as sensor publisher, laptop as server (demo mode)
 
 ```bash
@@ -136,10 +149,18 @@ YOLOv8n model (~6MB) downloads automatically on first run and is cached in `./da
 ```bash
 cd coolwatcher
 flutter pub get
-flutter run -d <device>
+flutter run -d <device> \
+     --dart-define=MQTT_BROKER_HOST=<backend-pc-lan-ip> \
+     --dart-define=API_BASE_URL=http://<backend-pc-lan-ip>:8000
 ```
 
-Broker IP is hardcoded to `192.168.179.24` in `lib/main.dart`; update for your network.
+`MQTT_BROKER_HOST` and `API_BASE_URL` default to the demo PC values, but set them when running on another machine.
+The phone and the Flutter-running PC must still be on the same Wi‑Fi as the backend.
+
+### Demo IP behavior
+
+- `docker compose` now uses `host.docker.internal` for the host-facing CV stream URL inside the app container
+- `scripts/start-demo.sh` auto-detects the LAN IP and passes it to Flutter via `--dart-define`
 
 ---
 

@@ -9,8 +9,14 @@ void main() {
   runApp(const EcoMonitorApp());
 }
 
-const String brokerIp = "192.168.179.24"; 
-const String apiBase = "http://192.168.179.24:8000";
+const String brokerIp = String.fromEnvironment(
+  'MQTT_BROKER_HOST',
+  defaultValue: '192.168.179.24',
+);
+const String apiBase = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'http://192.168.179.24:8000',
+);
 
 class MycomColors {
   static const Color red = Color(0xFFD50032);

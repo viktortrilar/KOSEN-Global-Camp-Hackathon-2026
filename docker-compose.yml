@@ -15,6 +15,8 @@ services:
     container_name: coolwatch-app
     ports:
       - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./app:/app
       - ./data:/data
@@ -23,7 +25,7 @@ services:
       - MQTT_PORT=1883
       - DB_PATH=/data/coolwatch.db
       - RUN_SIMULATOR=${RUN_SIMULATOR:-true}   # set false when Pi is the publisher
-      - CV_STREAM_URL=${CV_STREAM_URL:-http://192.168.179.15:8001/stream}
+      - CV_STREAM_URL=${CV_STREAM_URL:-http://host.docker.internal:8001/stream}
     depends_on:
       - mosquitto
     restart: unless-stopped
