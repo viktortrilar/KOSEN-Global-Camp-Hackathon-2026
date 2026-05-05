@@ -30,6 +30,19 @@ print("[CV] Loading YOLOv8n model...")
 model = YOLO("yolov8n.pt")
 print("[CV] Model ready.")
 
+# try OpenCV Haar cascade for more accurate face localization; fallback to box-heuristic
+_FACE_CASCADE = None
+try:
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    _FACE_CASCADE = cv2.CascadeClassifier(cascade_path)
+    if _FACE_CASCADE.empty():
+        print(f"[CV] WARNING: face cascade not found at {cascade_path} — will use box heuristic")
+        _FACE_CASCADE = None
+    else:
+        print(f"[CV] Face cascade loaded: {cascade_path}")
+except Exception:
+    _FACE_CASCADE = None
+
 # ── shared state ──────────────────────────────────────────────────────────────
 
 _frame_lock            = threading.Lock()
@@ -84,20 +97,63 @@ def detect_person(bgr: np.ndarray) -> tuple[int, np.ndarray]:
 
 
 def blur_faces(frame: np.ndarray, person_boxes: list) -> np.ndarray:
-    """Pixelate the top quarter of each person bounding box (approximate face region)."""
+    """Blur faces for privacy.
+
+    Strategy:
+    - If OpenCV Haar cascade is available, detect faces and pixelate a trimmed central region
+      (trim top to avoid hair being blurred).
+    - Otherwise fall back to the previous person-box top-quarter heuristic with a small
+      downward offset to reduce hair capture.
+    """
     if not FACE_BLUR:
         return frame
+
+    h_frame, w_frame = frame.shape[:2]
+
+    # First attempt: Haar cascade
+    if _FACE_CASCADE is not None:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = _FACE_CASCADE.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=4,
+            minSize=(30, 30),
+        )
+        if len(faces) > 0:
+            for (x, y, w, h) in faces:
+                # trim top (hair) and bottom slightly to focus on face center
+                top_crop = int(h * 0.15)
+                bottom_crop = int(h * 0.10)
+                y1 = max(0, y + top_crop)
+                y2 = min(h_frame, y + h - bottom_crop)
+                x1 = max(0, x)
+                x2 = min(w_frame, x + w)
+                roi = frame[y1:y2, x1:x2]
+                if roi.size == 0:
+                    continue
+                small_w = max(1, (x2 - x1) // 12)
+                small_h = max(1, (y2 - y1) // 12)
+                tiny = cv2.resize(roi, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+                frame[y1:y2, x1:x2] = cv2.resize(
+                    tiny, (x2 - x1, y2 - y1), interpolation=cv2.INTER_NEAREST
+                )
+            return frame
+
+    # Fallback: person-box heuristic (top region, shifted slightly down to avoid hair)
     for (x1, y1, x2, y2, _) in person_boxes:
-        face_y2 = y1 + max(1, (y2 - y1) // 4)
+        box_h = max(1, y2 - y1)
+        # start a little below the top (8% of box) and take ~22% of height
+        start_y = y1 + int(box_h * 0.08)
+        face_h = max(1, int(box_h * 0.22))
+        fy1 = max(0, start_y)
+        fy2 = min(h_frame, start_y + face_h)
         fx1 = max(0, x1)
-        fy1 = max(0, y1)
-        fx2 = min(frame.shape[1], x2)
-        fy2 = min(frame.shape[0], face_y2)
+        fx2 = min(w_frame, x2)
         roi = frame[fy1:fy2, fx1:fx2]
         if roi.size == 0:
             continue
-        small_w = max(1, (fx2 - fx1) // 16)
-        small_h = max(1, (fy2 - fy1) // 16)
+        small_w = max(1, (fx2 - fx1) // 12)
+        small_h = max(1, (fy2 - fy1) // 12)
         tiny = cv2.resize(roi, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
         frame[fy1:fy2, fx1:fx2] = cv2.resize(
             tiny, (fx2 - fx1, fy2 - fy1), interpolation=cv2.INTER_NEAREST
