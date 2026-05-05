@@ -9,6 +9,9 @@ void main() {
   runApp(const EcoMonitorApp());
 }
 
+const String brokerIp = "192.168.179.24"; 
+const String apiBase = "http://192.168.179.24:8000";
+
 class MycomColors {
   static const Color red = Color(0xFFD50032);
   static const Color black = Color(0xFF111111);
@@ -71,8 +74,6 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  final String brokerIp = "192.168.179.24"; 
-  final String apiBase = "http://192.168.179.24:8000";
   late MqttServerClient client;
   Map<String, RoomData> rooms = {};
 
