@@ -30,16 +30,15 @@ services:
   cv:
     build: ./cv
     container_name: coolwatch-cv
+    network_mode: host   # needs host network to reach Tailscale IPs (phone camera)
     volumes:
       - ./data:/data        # rois.json lives here
     environment:
-      - MQTT_HOST=mosquitto
+      - MQTT_HOST=127.0.0.1  # mosquitto is exposed on host port 1883
       - MQTT_PORT=1883
-      - CAMERA_URL=${CAMERA_URL:-http://192.168.179.x:8080/video}
+      - CAMERA_URL=${CAMERA_URL:-http://100.114.67.140:8080/video}
       - ROOM=sendai_lab
       - ROIS_FILE=/data/rois.json
       - DIFF_THRESHOLD=0.05
       - INTERVAL=2.0
-    depends_on:
-      - mosquitto
     restart: unless-stopped

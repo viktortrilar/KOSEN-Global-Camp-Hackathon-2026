@@ -18,7 +18,7 @@ import numpy as np
 import paho.mqtt.client as mqtt
 from ultralytics import YOLO
 
-CAMERA_URL  = os.getenv("CAMERA_URL",  "http://192.168.179.x:8080/video")
+CAMERA_URL  = os.getenv("CAMERA_URL",  "http://100.114.67.140:8080/video")
 MQTT_HOST   = os.getenv("MQTT_HOST",   "mosquitto")
 MQTT_PORT   = int(os.getenv("MQTT_PORT", 1883))
 ROOM        = os.getenv("ROOM",        "sendai_lab")
