@@ -9,18 +9,16 @@ handles them in one place.
 Model downloads automatically on first run (~6MB) to YOLO_CONFIG_DIR
 which is mounted as a volume so it persists across restarts.
 """
-import io, os, time, json, sys
+import os, time, json
 
 os.environ.setdefault("YOLO_CONFIG_DIR", "/data/yolo")  # persist model across restarts
 
+import cv2
 import numpy as np
-import requests
-from PIL import Image
 import paho.mqtt.client as mqtt
 from ultralytics import YOLO
 
-CAMERA_URL  = os.getenv("CAMERA_URL",  "http://192.168.179.x:8080").rstrip("/")
-SHOT_URL    = CAMERA_URL + "/shot.jpg"
+CAMERA_URL  = os.getenv("CAMERA_URL",  "rtsp://192.168.179.24:8554/cam1")
 MQTT_HOST   = os.getenv("MQTT_HOST",   "mosquitto")
 MQTT_PORT   = int(os.getenv("MQTT_PORT", 1883))
 ROOM        = os.getenv("ROOM",        "sendai_lab")
@@ -32,6 +30,8 @@ PERSON_CONF = float(os.getenv("PERSON_CONF",    "0.5"))
 print("[CV] Loading YOLOv8n model...")
 model = YOLO("yolov8n.pt")
 print("[CV] Model ready.")
+
+_cap = None
 
 
 def load_rois() -> dict:
@@ -45,22 +45,36 @@ def load_rois() -> dict:
         return {}
 
 
+def _get_cap() -> cv2.VideoCapture:
+    global _cap
+    if _cap is None or not _cap.isOpened():
+        if _cap is not None:
+            _cap.release()
+        _cap = cv2.VideoCapture(CAMERA_URL)
+    return _cap
+
+
 def fetch_frame() -> tuple[np.ndarray | None, np.ndarray | None]:
     """Returns (rgb, gray) numpy arrays, or (None, None) on failure."""
+    global _cap
     try:
-        resp = requests.get(SHOT_URL, timeout=3.0)
-        resp.raise_for_status()
-        img  = Image.open(io.BytesIO(resp.content))
-        rgb  = np.array(img.convert("RGB"),  dtype=np.uint8)
-        gray = np.array(img.convert("L"),    dtype=np.uint8)
+        cap = _get_cap()
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            _cap = None  # force reconnect next call
+            print(f"[CV] Frame read failed, will reconnect")
+            return None, None
+        rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return rgb, gray
     except Exception as e:
+        _cap = None
         print(f"[CV] Frame fetch failed: {e}")
         return None, None
 
 
 def capture_reference() -> np.ndarray:
-    print(f"[CV] Waiting for camera at {SHOT_URL}...")
+    print(f"[CV] Waiting for stream at {CAMERA_URL}...")
     while True:
         _, gray = fetch_frame()
         if gray is not None:

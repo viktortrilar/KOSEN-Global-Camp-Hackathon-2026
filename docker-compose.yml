@@ -35,7 +35,7 @@ services:
     environment:
       - MQTT_HOST=mosquitto
       - MQTT_PORT=1883
-      - CAMERA_URL=${CAMERA_URL:-http://192.168.179.x:8080}
+      - CAMERA_URL=${CAMERA_URL:-rtsp://192.168.179.24:8554/cam1}
       - ROOM=sendai_lab
       - ROIS_FILE=/data/rois.json
       - DIFF_THRESHOLD=0.05

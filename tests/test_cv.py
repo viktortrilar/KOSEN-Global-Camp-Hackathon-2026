@@ -1,8 +1,6 @@
-import io
 import json
 import pytest
 import numpy as np
-from PIL import Image
 from unittest.mock import MagicMock, patch
 import detector
 
@@ -60,18 +58,19 @@ def test_load_rois_returns_empty_when_missing(tmp_path):
 
 # ── fetch_frame ───────────────────────────────────────────────────────────────
 
-def _make_jpeg(width: int = 100, height: int = 80) -> bytes:
-    img = Image.new("RGB", (width, height), color=(120, 60, 200))
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG")
-    return buf.getvalue()
+def _make_bgr_frame(width: int = 100, height: int = 80) -> np.ndarray:
+    """Create a BGR frame as cv2 would return it."""
+    return np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
+
 
 def test_fetch_frame_returns_rgb_and_gray():
-    mock_resp = MagicMock()
-    mock_resp.content = _make_jpeg(100, 80)
-    mock_resp.raise_for_status = MagicMock()
+    bgr = _make_bgr_frame(100, 80)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.return_value = (True, bgr)
 
-    with patch("detector.requests.get", return_value=mock_resp):
+    detector._cap = None
+    with patch("detector.cv2.VideoCapture", return_value=mock_cap):
         rgb, gray = detector.fetch_frame()
 
     assert rgb  is not None
@@ -79,19 +78,45 @@ def test_fetch_frame_returns_rgb_and_gray():
     assert rgb.shape  == (80, 100, 3)
     assert gray.shape == (80, 100)
 
-def test_fetch_frame_returns_none_on_network_error():
-    with patch("detector.requests.get", side_effect=ConnectionError("refused")):
+
+def test_fetch_frame_returns_none_on_read_failure():
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.return_value = (False, None)
+
+    detector._cap = None
+    with patch("detector.cv2.VideoCapture", return_value=mock_cap):
         rgb, gray = detector.fetch_frame()
+
+    assert rgb  is None
+    assert gray is None
+    assert detector._cap is None  # cap was reset for reconnect
+
+
+def test_fetch_frame_returns_none_on_exception():
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = RuntimeError("stream error")
+
+    detector._cap = None
+    with patch("detector.cv2.VideoCapture", return_value=mock_cap):
+        rgb, gray = detector.fetch_frame()
+
     assert rgb  is None
     assert gray is None
 
-def test_fetch_frame_returns_none_on_bad_status():
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = Exception("404")
-    with patch("detector.requests.get", return_value=mock_resp):
-        rgb, gray = detector.fetch_frame()
-    assert rgb  is None
-    assert gray is None
+
+def test_fetch_frame_reuses_existing_cap():
+    bgr = _make_bgr_frame()
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.return_value = (True, bgr)
+
+    detector._cap = mock_cap
+    with patch("detector.cv2.VideoCapture") as mock_ctor:
+        detector.fetch_frame()
+    mock_ctor.assert_not_called()  # no new VideoCapture created
+    detector._cap = None
 
 
 # ── detect_person ─────────────────────────────────────────────────────────────
