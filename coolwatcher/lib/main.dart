@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:mqtt_client/mqtt_client.dart';
+import 'package:mqtt_client/mqtt_server_client.dart';
 
 void main() {
   runApp(const EcoMonitorApp());
@@ -10,43 +14,27 @@ class EcoMonitorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Global Campus Eco-Monitor',
+      title: 'Global Campus Sendai - EcoMonitor',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.light,
-        primarySwatch: Colors.green,
-        useMaterial3: true,
-      ),
+      theme: ThemeData(primarySwatch: Colors.green, useMaterial3: true),
       home: const DashboardPage(),
     );
   }
 }
 
-// Modèle de données pour une salle
 class RoomData {
-  final String id; // F1:R1
-  final String name; // Kitchen
-  double temp;
-  double humidity;
-  double co2;
-  double watts;
-  bool isOccupied;
-  bool windowOpen;
-  bool heaterOn;
-  bool lightOn;
+  final String id;
+  final String name;
+  double temp = 0;
+  double humidity = 0;
+  double co2 = 0;
+  double watts = 0;
+  bool isOccupied = false;
+  bool windowOpen = false;
+  bool heaterOn = false;
+  bool lightOn = false;
 
-  RoomData({
-    required this.id,
-    required this.name,
-    this.temp = 0,
-    this.humidity = 0,
-    this.co2 = 0,
-    this.watts = 0,
-    this.isOccupied = false,
-    this.windowOpen = false,
-    this.heaterOn = false,
-    this.lightOn = false,
-  });
+  RoomData({required this.id, required this.name});
 }
 
 class DashboardPage extends StatefulWidget {
@@ -57,57 +45,133 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  // Simulation de la structure dynamique reçue par MQTT
-  final Map<String, RoomData> rooms = {
-    'F1:R1': RoomData(id: 'F1:R1', name: 'Kitchen', temp: 22.5, humidity: 45, co2: 410, watts: 150, isOccupied: true, heaterOn: true),
-    'F1:R2': RoomData(id: 'F1:R2', name: 'Office A', temp: 19.0, humidity: 50, co2: 380, watts: 45, windowOpen: true),
-    'F2:R1': RoomData(id: 'F2:R1', name: 'Meeting Room', temp: 21.0, humidity: 40, co2: 850, watts: 300, isOccupied: true, lightOn: true),
-    'F2:R2': RoomData(id: 'F2:R2', name: 'Lounge', temp: 20.5, humidity: 48, co2: 400, watts: 10),
-  };
+  // Configuration MQTT - REMPLACE PAR L'IP DE TON RPI5
+  final String brokerIp = "192.168.179.24"; 
+  late MqttServerClient client;
+  Map<String, RoomData> rooms = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _setupMqtt();
+  }
+
+  Future<void> _setupMqtt() async {
+    client = MqttServerClient(brokerIp, 'flutter_client_${DateTime.now().millisecondsSinceEpoch}');
+    client.port = 1883;
+    client.logging(on: true); // Active les logs détaillés de la connexion MQTT
+    client.keepAlivePeriod = 20;
+    client.onDisconnected = () => print('MQTT: Disconnected');
+
+    final connMess = MqttConnectMessage()
+        .withClientIdentifier('flutter_client_${DateTime.now().millisecondsSinceEpoch}')
+        .startClean()
+        .withWillQos(MqttQos.atLeastOnce);
+    client.connectionMessage = connMess;
+
+    try {
+      await client.connect();
+    } catch (e) {
+      print('MQTT: Connection failed - $e');
+      client.disconnect();
+    }
+
+    if (client.connectionStatus!.state == MqttConnectionState.connected) {
+      print('MQTT: Connected to RPI5');
+      // Souscription au wildcard pour recevoir toutes les données des salles
+      // Format attendu: F1/R1/Kitchen/TEMP
+      client.subscribe("#", MqttQos.atMostOnce);
+
+      client.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
+        final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
+        final String pt = MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
+        final String topic = c[0].topic;
+
+        print('DEBUG MQTT -> Topic: $topic, Payload: $pt');
+
+        _parseMqttData(topic, pt);
+      });
+    }
+  }
+
+  void _parseMqttData(String topic, String value) {
+    // Expected format from simulator: room/{room_id}/sensors OR room/{room_id}/openings
+    List<String> parts = topic.split('/');
+    if (parts.length < 3 || parts[0] != 'room') {
+      print('MQTT: Ignored topic - $topic');
+      return;
+    }
+
+    String baseRoomId = parts[1];
+    String dataType = parts[2]; // 'sensors' or 'openings'
+
+    // Ajout d'un étage par défaut (F1) pour conserver le design des dossiers
+    String floorCode = "F1";
+    String roomId = "$floorCode:$baseRoomId";
+
+    setState(() {
+      if (!rooms.containsKey(roomId)) {
+        // Format the room ID into a readable name (e.g., sendai_lab -> Sendai Lab)
+        String roomName = baseRoomId.split('_').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
+        rooms[roomId] = RoomData(id: roomId, name: roomName);
+      }
+
+      final room = rooms[roomId]!;
+      
+      try {
+        final Map<String, dynamic> payload = jsonDecode(value);
+        
+        if (dataType == 'sensors') {
+          if (payload.containsKey('temperature')) room.temp = (payload['temperature'] as num).toDouble();
+          if (payload.containsKey('humidity')) room.humidity = (payload['humidity'] as num).toDouble();
+          if (payload.containsKey('co2')) room.co2 = (payload['co2'] as num).toDouble();
+          if (payload.containsKey('power')) room.watts = (payload['power'] as num).toDouble();
+          if (payload.containsKey('occupied')) room.isOccupied = payload['occupied'] as bool;
+          if (payload.containsKey('ac_on')) room.heaterOn = payload['ac_on'] as bool;
+        } else if (dataType == 'openings') {
+          if (payload.containsKey('openings')) {
+            final openings = payload['openings'] as Map<String, dynamic>;
+            if (openings.containsKey('window')) room.windowOpen = openings['window'] == 'open';
+          }
+        }
+      } catch (e) {
+        print('MQTT: Failed to parse JSON payload - $e');
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Extraction unique des étages (F1, F2...)
     final floors = rooms.keys.map((id) => id.split(':').first).toSet().toList()..sort();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Global Campus - Sendai'),
-        centerTitle: true,
-        backgroundColor: Colors.green[700],
-        foregroundColor: Colors.white,
+        title: const Text('Global Campus Eco-Monitor'),
+        actions: [
+          Icon(Icons.circle, color: client.connectionStatus?.state == MqttConnectionState.connected ? Colors.green : Colors.red),
+          const SizedBox(width: 15),
+        ],
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        itemCount: floors.length,
-        itemBuilder: (context, index) {
-          String floor = floors[index];
-          return _buildFloorFolder(floor);
-        },
-      ),
+      body: rooms.isEmpty 
+        ? const Center(child: Text("Waiting for MQTT data from RPI5..."))
+        : ListView.builder(
+            itemCount: floors.length,
+            itemBuilder: (context, index) => _buildFloorFolder(floors[index]),
+          ),
     );
   }
 
   Widget _buildFloorFolder(String floorCode) {
     final floorRooms = rooms.values.where((r) => r.id.startsWith(floorCode)).toList();
-
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: ExpansionTile(
-        leading: const Icon(Icons.folder_special, color: Colors.amber),
-        title: Text('Floor $floorCode', style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text('${floorRooms.length} rooms monitored'),
+        leading: const Icon(Icons.folder, color: Colors.orange),
+        title: Text('Floor $floorCode'),
         children: floorRooms.map((room) => ListTile(
-          leading: const Icon(Icons.meeting_room_outlined),
           title: Text(room.name),
           subtitle: Text(room.id),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => RoomDetailPage(room: room)),
-            );
-          },
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => RoomDetailPage(room: room))),
         )).toList(),
       ),
     );
@@ -128,42 +192,33 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('${widget.room.id}: ${widget.room.name}'),
-        backgroundColor: Colors.green[600],
-        foregroundColor: Colors.white,
-      ),
+      appBar: AppBar(title: Text('${widget.room.id}: ${widget.room.name}')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // Section Indicateurs Numériques
-            _buildSensorCard('Temperature', '${widget.room.temp}°C', Icons.thermostat, Colors.orange, 'TEMP'),
-            _buildSensorCard('Humidity', '${widget.room.humidity}%', Icons.water_drop, Colors.blue, 'HUM'),
-            _buildSensorCard('CO2 Level', '${widget.room.co2} ppm', Icons.cloud, Colors.blueGrey, 'CO2'),
-            _buildSensorCard('Power Usage', '${widget.room.watts} W', Icons.bolt, Colors.amber, 'WATTS'),
-            
-            const SizedBox(height: 20),
+            _buildDataTile('Temperature', '${widget.room.temp}°C', Icons.thermostat, Colors.orange, 'TEMP'),
+            _buildDataTile('Humidity', '${widget.room.humidity}%', Icons.water_drop, Colors.blue, 'HUM'),
+            _buildDataTile('CO2', '${widget.room.co2} ppm', Icons.cloud, Colors.blueGrey, 'CO2'),
+            _buildDataTile('Power', '${widget.room.watts} W', Icons.bolt, Colors.amber, 'WATTS'),
             const Divider(),
-            const SizedBox(height: 10),
-
-            // Section Interrupteurs/États
-            Wrap(
-              spacing: 15,
-              runSpacing: 15,
-              alignment: WrapAlignment.center,
-              children: [
-                _buildStatusIndicator('Occupied', widget.room.isOccupied, Icons.person),
-                _buildStatusIndicator('Window', widget.room.windowOpen, Icons.window, activeLabel: 'OPEN', inactiveLabel: 'CLOSED'),
-                _buildStatusIndicator('Heater', widget.room.heaterOn, Icons.heat_pump),
-                _buildStatusIndicator('Light', widget.room.lightOn, Icons.lightbulb),
-              ],
-            ),
-
-            // Zone d'affichage du graphique dynamique
+            _buildStatusTile('Occupancy', widget.room.isOccupied, Icons.person),
+            _buildStatusTile('Window', widget.room.windowOpen, Icons.window),
+            _buildStatusTile('Heater', widget.room.heaterOn, Icons.heat_pump),
             if (activeGraph != null) ...[
-              const SizedBox(height: 30),
-              _buildGraphPlaceholder(),
+              const SizedBox(height: 20),
+              Container(
+                height: 200, 
+                width: double.infinity, 
+                color: Colors.black12, 
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text("Real-time Chart: $activeGraph"),
+                    const Icon(Icons.show_chart, size: 50),
+                  ],
+                ),
+              )
             ]
           ],
         ),
@@ -171,87 +226,28 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     );
   }
 
-  Widget _buildSensorCard(String label, String value, IconData icon, Color color, String graphKey) {
-    bool isSelected = activeGraph == graphKey;
-
-    return Card(
-      elevation: isSelected ? 4 : 1,
-      margin: const EdgeInsets.only(bottom: 10),
-      color: isSelected ? Colors.green[50] : null,
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color.withOpacity(0.1),
-          child: Icon(icon, color: color),
-        ),
-        title: Text(label),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-            const SizedBox(width: 10),
-            IconButton(
-              icon: Icon(Icons.show_chart, color: isSelected ? Colors.green : Colors.grey),
-              onPressed: () {
-                setState(() {
-                  activeGraph = (activeGraph == graphKey) ? null : graphKey;
-                });
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusIndicator(String label, bool isOn, IconData icon, {String? activeLabel, String? inactiveLabel}) {
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isOn ? Colors.green[100] : Colors.red[50],
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isOn ? Colors.green : Colors.red),
-      ),
-      child: Row(
+  Widget _buildDataTile(String label, String value, IconData icon, Color color, String key) {
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(label),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: isOn ? Colors.green[800] : Colors.red[800]),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: const TextStyle(fontSize: 12)),
-                Text(
-                  isOn ? (activeLabel ?? 'ON') : (inactiveLabel ?? 'OFF'),
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          )
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+          IconButton(
+            icon: Icon(Icons.query_stats, color: activeGraph == key ? Colors.green : Colors.grey),
+            onPressed: () => setState(() => activeGraph = activeGraph == key ? null : key),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildGraphPlaceholder() {
-    return Container(
-      height: 250,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text('Live Timeline: $activeGraph', style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 20),
-          const Icon(Icons.auto_graph, size: 80, color: Colors.green),
-          const SizedBox(height: 10),
-          const Text('Visualisation des données temporelles...', style: TextStyle(color: Colors.grey, fontSize: 12)),
-        ],
-      ),
+  Widget _buildStatusTile(String label, bool state, IconData icon) {
+    return ListTile(
+      leading: Icon(icon, color: state ? Colors.green : Colors.red),
+      title: Text(label),
+      trailing: Text(state ? "ON/OPEN" : "OFF/CLOSED", style: TextStyle(color: state ? Colors.green : Colors.red, fontWeight: FontWeight.bold)),
     );
   }
 }
