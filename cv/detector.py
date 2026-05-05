@@ -157,6 +157,7 @@ def start_stream_server():
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 def main():
+    global _latest_jpeg
     rois      = load_rois()
     reference = capture_reference()
 
